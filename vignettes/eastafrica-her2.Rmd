@@ -1,0 +1,140 @@
+---
+title: "Application of bcimodel to East Africa with HER2 extension"
+author: "Roman Gulati"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{"Application to East Africa with HER2 extension"}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}{inputenc}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+This vignette illustrates application of the bcimodel to Uganda, including effects of trastuzumab for HER2+ cancers.
+
+## Reproduce default analysis in Shiny app
+Are mortrates in compile\_naturalhist 5-year survival rates as in Shiny app, 1-(5-year survival rates) as name suggests, or something else?
+```{r default}
+library(bcimodel)
+default <- list(pol=data.frame(num=c(1, 2, 3),
+                               id=c('e0', 'e1', 'e4'),
+                               name=c('Base Case',
+                                      'Tamoxifen for ER+',
+                                      'Tamoxifen for ER+ and 23% stage shift'),
+                               pairnum=c(NA, NA, 2),
+                               earlydetHR=c(1, 1, 0.77),
+                               stringsAsFactors=FALSE),
+                nh=compile_naturalhist(prop_adv=0.78,
+                                       mortrates=c(Early=0.31, Advanced=0.65),
+                                       #mortrates=c(Early=0.69, Advanced=0.35),
+                                       subgroup_probs=c('ER+'=0.41, 'ER-'=0.59)))
+default$map <- create_stageshift_map(default$nh)
+
+create_treatment_distribution <- function(nh,
+                                          pol,
+                                          treat_hrs=c('None'=1, 'Tamoxifen'=0.7),
+                                          treat_probs=c('None'=1, 'Tamoxifen'=0)){
+    ssids <- with(nh, paste(stage, subgroup, sep='.'))
+    tset <- expand.grid(txHR=treat_hrs,
+                        SSid=ssids,
+                        stringsAsFactors=FALSE)
+    tset <- with(tset, data.frame(SSno=as.integer(factor(SSid, levels=unique(SSid))),
+                                  SSid,
+                                  txSSno=seq_len(nrow(tset)),
+                                  txSSid=names(treat_hrs),
+                                  txHR,
+                                  stringsAsFactors=FALSE))
+    tprobs <- data.frame(txSSid=names(treat_probs),
+                         treat_probs,
+                         row.names=NULL,
+                         stringsAsFactors=FALSE)
+    tprobs <- reshape::cast(merge(tprobs, data.frame(policy=pol$id)),
+                            txSSid~policy,
+                            value='treat_probs')
+    merged <- merge(tset, tprobs, by='txSSid')
+    merged <- reshape::sort_df(merged, vars='txSSno')
+    merged <- merged[, c('SSno', 'SSid', 'txSSno', 'txSSid', 'txHR', as.character(pol$id))]
+    return(merged)
+}
+default$tx <- with(default, create_treatment_distribution(nh, pol))
+default$tx <- within(default$tx, {
+                         e1[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
+                         e1[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                         e4[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
+                         e4[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                            })
+set.seed(98103)
+uganda_default <- with(default, simpolicies(pol, nh, tx,
+                                            minage=30,
+                                            maxage=49,
+                                            futimes=c(10, 20),
+                                            popsize=100000))
+knitr::kable(uganda_default[['10']])
+knitr::kable(uganda_default[['20']])
+```
+
+## Incorporate HER2 subgroups and add new policy scenario
+Extend subgroups assuming 15% of women are HER2+ and no correlation with ER
+status and stage at presentation.
+```{r her2}
+her2 <- list(pol=data.frame(num=c(1, 2, 3, 4),
+                            id=c('e0', 'e1', 'e4', 'e10'),
+                            name=c('Base Case',
+                                   'Tamoxifen for ER+',
+                                   'Tamoxifen for ER+ and 23% stage shift',
+                                   'Tamoxifen for ER+, trastuzumab for HER2+, and 23% stage shift'),
+                            pairnum=c(NA, NA, 2, 3),
+                            earlydetHR=c(1, 1, 0.77, 0.77),
+                            stringsAsFactors=FALSE),
+             nh=compile_naturalhist(prop_adv=0.78,
+                                    mortrates=c(Early=0.31, Advanced=0.65),
+                                    #mortrates=c(Early=0.69, Advanced=0.35),
+                                    subgroup_probs=c('ER+HER2+'=0.41*0.15,
+                                                     'ER-HER2+'=0.59*0.15,
+                                                     'ER+HER2-'=0.41*0.85,
+                                                     'ER-HER2-'=0.59*0.85)))
+her2$map <- create_stageshift_map(her2$nh)
+
+her2$tx <- with(her2, create_treatment_distribution(nh, pol,
+                                                    treat_hrs=c('None'=1,
+                                                                'Tamoxifen'=0.7,
+                                                                'Trastuzumab'=0.6),
+                                                    treat_probs=c('None'=1,
+                                                                  'Tamoxifen'=0,
+                                                                  'Trastuzumab'=0)))
+her2$tx <- within(her2$tx, {
+                         e1[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
+                         e1[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                         e4[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
+                         e4[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                         e10[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
+                         e10[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                         e10[grepl('HER2[+]', SSid) & txSSid == 'None'] <- 0
+                         e10[grepl('HER2[+]', SSid) & txSSid == 'Trastuzumab'] <- 1
+                         e10[grepl('ER[+]HER2[+]', SSid) & txSSid == 'Tamoxifen'] <- 0
+                            })
+plyr::ddply(her2$tx,
+            'SSid',
+            plyr::summarize,
+            e0=sum(e0),
+            e1=sum(e1),
+            e4=sum(e4),
+            e10=sum(e10))
+set.seed(98103)
+uganda_her2 <- with(her2, simpolicies(pol, nh, tx,
+                                      minage=30,
+                                      maxage=49,
+                                      futimes=c(10, 20),
+                                      popsize=10000))
+knitr::kable(uganda_her2[['10']])
+knitr::kable(uganda_her2[['20']])
+```
+
