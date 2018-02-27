@@ -18,30 +18,17 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Overview
-This vignette illustrates application of the bcimodel to Uganda, including effects of trastuzumab for HER2+ cancers.
+This vignette reproduces application of the [bcimodel]() to Uganda and extends this application to project expected impacts of mammography and aggressive treatments for appropriate cases, including effects of trastuzumab for HER2+ cancers.
 
-## Reproduce default analysis in Shiny app
-Are mortrates in compile\_naturalhist 5-year survival rates as in Shiny app, 1-(5-year survival rates) as name suggests, or something else?
-```{r default}
+## Create template for treatment distributions
+This is a simple function to format and initialize the treatment distribution model input.
+```{r create-treatment-distribution}
 library(bcimodel)
-default <- list(pol=data.frame(num=c(1, 2, 3),
-                               id=c('e0', 'e1', 'e4'),
-                               name=c('Base Case',
-                                      'Tamoxifen for ER+',
-                                      'Tamoxifen for ER+ and 23% stage shift'),
-                               pairnum=c(NA, NA, 2),
-                               earlydetHR=c(1, 1, 0.77),
-                               stringsAsFactors=FALSE),
-                nh=compile_naturalhist(prop_adv=0.78,
-                                       mortrates=c(Early=0.31, Advanced=0.65),
-                                       #mortrates=c(Early=0.69, Advanced=0.35),
-                                       subgroup_probs=c('ER+'=0.41, 'ER-'=0.59)))
-default$map <- create_stageshift_map(default$nh)
-
 create_treatment_distribution <- function(nh,
                                           pol,
                                           treat_hrs=c('None'=1, 'Tamoxifen'=0.7),
-                                          treat_probs=c('None'=1, 'Tamoxifen'=0)){
+                                          treat_probs=c('None'=1, 'Tamoxifen'=0),
+                                          scale_by_subgroup=FALSE){
     ssids <- with(nh, paste(stage, subgroup, sep='.'))
     tset <- expand.grid(txHR=treat_hrs,
                         SSid=ssids,
@@ -60,17 +47,53 @@ create_treatment_distribution <- function(nh,
                             txSSid~policy,
                             value='treat_probs')
     merged <- merge(tset, tprobs, by='txSSid')
+    merged <- transform(merged, subgroup=sub('^[^.]*[.](.*)$', '\\1', SSid))
+    if(scale_by_subgroup){
+        sgids <- plyr::ddply(nh, 'subgroup', plyr::summarize, prop=sum(prop))
+        merged <- merge(merged, sgids, by='subgroup')
+        for(policy in as.character(pol$id))
+            merged[[policy]] <- merged[[policy]]*merged[['prop']]
+    }
     merged <- reshape::sort_df(merged, vars='txSSno')
     merged <- merged[, c('SSno', 'SSid', 'txSSno', 'txSSid', 'txHR', as.character(pol$id))]
     return(merged)
 }
+```
+
+## Reproduce default analysis in Shiny app
+The following code reproduces the default analysis in the Shiny app based on the example in the [introduction]() vignette.
+```{r default}
+exp.rate <- function(survival, year=5) -log(survival)/year
+
+default <- list(pol=data.frame(num=c(1, 2, 3),
+                               id=c('e0', 'e1', 'e4'),
+                               name=c('Base Case',
+                                      'Tamoxifen for ER+',
+                                      'Tamoxifen for ER+ and 23% stage shift'),
+                               pairnum=c(NA, NA, 2),
+                               earlydetHR=c(1, 1, 0.77),
+                               stringsAsFactors=FALSE),
+                nh=compile_naturalhist(prop_adv=0.78,
+                                       mortrates=c(Early=exp.rate(0.69),
+                                                   Advanced=exp.rate(0.35)),
+                                       subgroup_probs=c('ER+'=0.41, 'ER-'=1-0.41)))
+default$map <- create_stageshift_map(default$nh)
 default$tx <- with(default, create_treatment_distribution(nh, pol))
 default$tx <- within(default$tx, {
+                         txHR[grepl('ER[-]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                         e0[txSSid == 'None'] <- 0.8
+                         e0[txSSid == 'Tamoxifen'] <- 0.2
                          e1[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
                          e1[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
                          e4[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
                          e4[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
                             })
+plyr::d_ply(default$tx,
+            'SSid',
+            with,
+            stopifnot(sum(e0) == 1 &
+                      sum(e1) == 1 &
+                      sum(e4) == 1))
 set.seed(98103)
 uganda_default <- with(default, simpolicies(pol, nh, tx,
                                             minage=30,
@@ -81,9 +104,15 @@ knitr::kable(uganda_default[['10']])
 knitr::kable(uganda_default[['20']])
 ```
 
+Questions:
+
+* Should treatment distributions sum to 1 within each stage-subgroup (as in
+  [introduction]()) or sum to 1 within each stage (as in Shiny app)?
+
+* Why does tx input give tamoxifen txHR=0.7 even for ER- cancers in Shiny app?
+
 ## Incorporate HER2 subgroups and add new policy scenario
-Extend subgroups assuming 15% of women are HER2+ and no correlation with ER
-status and stage at presentation.
+The following code extends subgroups assuming 15% of cancers are HER2+, uncorrelated with ER status and stage at presentation, based on the example in the [introduction]() vignette. It also assumes efficacy of trastuzumab implies HR=0.60
 ```{r her2}
 her2 <- list(pol=data.frame(num=c(1, 2, 3, 4),
                             id=c('e0', 'e1', 'e4', 'e10'),
@@ -95,14 +124,13 @@ her2 <- list(pol=data.frame(num=c(1, 2, 3, 4),
                             earlydetHR=c(1, 1, 0.77, 0.77),
                             stringsAsFactors=FALSE),
              nh=compile_naturalhist(prop_adv=0.78,
-                                    mortrates=c(Early=0.31, Advanced=0.65),
-                                    #mortrates=c(Early=0.69, Advanced=0.35),
+                                    mortrates=c(Early=exp.rate(0.69),
+                                                Advanced=exp.rate(0.35)),
                                     subgroup_probs=c('ER+HER2+'=0.41*0.15,
-                                                     'ER-HER2+'=0.59*0.15,
-                                                     'ER+HER2-'=0.41*0.85,
-                                                     'ER-HER2-'=0.59*0.85)))
+                                                     'ER-HER2+'=(1-0.41)*0.15,
+                                                     'ER+HER2-'=0.41*(1-0.15),
+                                                     'ER-HER2-'=(1-0.41)*(1-0.15))))
 her2$map <- create_stageshift_map(her2$nh)
-
 her2$tx <- with(her2, create_treatment_distribution(nh, pol,
                                                     treat_hrs=c('None'=1,
                                                                 'Tamoxifen'=0.7,
@@ -111,6 +139,8 @@ her2$tx <- with(her2, create_treatment_distribution(nh, pol,
                                                                   'Tamoxifen'=0,
                                                                   'Trastuzumab'=0)))
 her2$tx <- within(her2$tx, {
+                         txHR[grepl('ER[-]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                         txHR[grepl('HER2[-]', SSid) & txSSid == 'Trastuzumab'] <- 1
                          e1[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
                          e1[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
                          e4[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
@@ -118,16 +148,16 @@ her2$tx <- within(her2$tx, {
                          e10[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
                          e10[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
                          e10[grepl('HER2[+]', SSid) & txSSid == 'None'] <- 0
-                         e10[grepl('HER2[+]', SSid) & txSSid == 'Trastuzumab'] <- 1
                          e10[grepl('ER[+]HER2[+]', SSid) & txSSid == 'Tamoxifen'] <- 0
+                         e10[grepl('HER2[+]', SSid) & txSSid == 'Trastuzumab'] <- 1
                             })
-plyr::ddply(her2$tx,
+plyr::d_ply(her2$tx,
             'SSid',
-            plyr::summarize,
-            e0=sum(e0),
-            e1=sum(e1),
-            e4=sum(e4),
-            e10=sum(e10))
+            with,
+            stopifnot(sum(e0) == 1 &
+                      sum(e1) == 1 &
+                      sum(e4) == 1 &
+                      sum(e10) == 1))
 set.seed(98103)
 uganda_her2 <- with(her2, simpolicies(pol, nh, tx,
                                       minage=30,
@@ -135,6 +165,13 @@ uganda_her2 <- with(her2, simpolicies(pol, nh, tx,
                                       futimes=c(10, 20),
                                       popsize=10000))
 knitr::kable(uganda_her2[['10']])
-knitr::kable(uganda_her2[['20']])
 ```
+
+To do:
+
+* Modify policies to use mammography (30% advanced stage at diagnosis) and chemotherapy for all ER- cancers and advanced ER+ cancers.
+
+* Should trastuzumab be replaced with tamoxifen+trastuzumab so treatment distributions sum to 1 when stage-subgroups involve both treatments?
+
+* Use wider age range? Use longer follow-up?
 
