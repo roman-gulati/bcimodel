@@ -1,7 +1,7 @@
 ---
 title: "Application of bcimodel to East Africa with HER2 extension"
 author: "Roman Gulati"
-date: "`r Sys.Date()`"
+date: "`r format(Sys.time(), "%B %d, %Y")`"
 output: rmarkdown::html_vignette
 vignette: >
   %\VignetteIndexEntry{"Application to East Africa with HER2 extension"}
@@ -9,12 +9,8 @@ vignette: >
   %\VignetteEncoding{UTF-8}{inputenc}
 ---
 
-```{r setup, include = FALSE}
-knitr::opts_chunk$set(
-  collapse = TRUE,
-  comment = "#>"
-)
-knitr::opts_chunk$set(echo = TRUE)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse=TRUE, comment="#>", echo=TRUE)
 ```
 
 ## Overview
@@ -99,7 +95,8 @@ uganda_default <- with(default, simpolicies(pol, nh, tx,
                                             minage=30,
                                             maxage=49,
                                             futimes=c(10, 20),
-                                            popsize=100000))
+                                            popsize=100000,
+                                            sims=100))
 knitr::kable(uganda_default[['10']])
 knitr::kable(uganda_default[['20']])
 ```
