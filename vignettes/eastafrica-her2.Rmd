@@ -56,7 +56,7 @@ create_treatment_distribution <- function(nh,
 }
 ```
 
-## Reproduce default analysis in Shiny app
+## Try to reproduce default analysis in Shiny app
 The following code reproduces the default analysis in the Shiny app based on the example in the [introduction]() vignette.
 ```{r default}
 exp.rate <- function(survival, year=5) -log(survival)/year
@@ -98,7 +98,6 @@ uganda_default <- with(default, simpolicies(pol, nh, tx,
                                             popsize=100000,
                                             sims=100))
 knitr::kable(uganda_default[['10']])
-knitr::kable(uganda_default[['20']])
 ```
 
 Questions:
@@ -108,17 +107,132 @@ Questions:
 
 * Why does tx input give tamoxifen txHR=0.7 even for ER- cancers in Shiny app?
 
+The following code explores these questions.
+```{r checkapp}
+checkapp <- list(pol=data.frame(num=c(1, 2),
+                                id=c('e0', 'e4'),
+                                name=c('Standard of Care', 'Intervention'),
+                                pairnum=c(NA, 1),
+                                earlydetHR=c(1, 0.77),
+                                stringsAsFactors=FALSE),
+                 nh=compile_naturalhist(prop_adv=0.78,
+                                        mortrates=c(Early=exp.rate(0.69),
+                                                    Advanced=exp.rate(0.35)),
+                                        subgroup_probs=c('ER-'=1-0.41, 'ER+'=0.41)))
+checkapp$map <- create_stageshift_map(checkapp$nh)
+scale_by_subgroup <- FALSE
+if(scale_by_subgroup){
+    checkapp$tx <- with(checkapp, create_treatment_distribution(nh, pol,
+                                                                scale_by_subgroup=TRUE))
+    checkapp$tx <- within(checkapp$tx, {
+                             txHR[grepl('ER[-]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                             e0[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0.41
+                             e0[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 0
+                             e0[grepl('ER[-]', SSid) & txSSid == 'None'] <- 0.59
+                             e0[grepl('ER[-]', SSid) & txSSid == 'Tamoxifen'] <- 0
+                             e4[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
+                             e4[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 0.41
+                             e4[grepl('ER[-]', SSid) & txSSid == 'None'] <- 0.59
+                             e4[grepl('ER[-]', SSid) & txSSid == 'Tamoxifen'] <- 0
+                                })
+    plyr::d_ply(transform(checkapp$tx, stage=sub('^([^.]*)[.].*$', '\\1', SSid)),
+                'stage',
+                with,
+                stopifnot(sum(e0) == 1 & sum(e4) == 1))
+} else {
+    checkapp$tx <- with(checkapp, create_treatment_distribution(nh, pol))
+    checkapp$tx <- within(checkapp$tx, {
+                             txHR[grepl('ER[-]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                             e4[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
+                             e4[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                                })
+    plyr::d_ply(checkapp$tx,
+                'SSid',
+                with,
+                stopifnot(sum(e0) == 1 & sum(e4) == 1))
+}
+set.seed(98103)
+uganda_checkapp <- with(checkapp, simpolicies(pol, nh, tx,
+                                              minage=30,
+                                              maxage=49,
+                                              futimes=c(10, 20),
+                                              popsize=100000))
+knitr::kable(uganda_checkapp[['10']])
+```
+These results are now identical to those obtained in the app. More precisely, it
+appears it doesn't matter (1) whether treatment distributions sum to 1 within each
+stage or within each stage-subgroup and (2) whether the tamoxifen txHR=0.7 or
+1.0 for ER- cancers. However, it does matter whether ER+ or ER- is specified
+first in the nh input---at least for small simulations.
+
+## Try to reproduce intervention E9 analysis in paper
+Now implement most aggressive screening and treatment policy.
+```{r checkpaper}
+checkpaper <- list(pol=data.frame(num=c(1, 2),
+                                  id=c('e0', 'e9'),
+                                  name=c('Standard of Care', 'Intervention'),
+                                  pairnum=c(NA, 1),
+                                  earlydetHR=c(1, 0.45),
+                                  stringsAsFactors=FALSE),
+                   nh=compile_naturalhist(prop_adv=0.78,
+                                          mortrates=c(Early=exp.rate(0.69),
+                                                      Advanced=exp.rate(0.35)),
+                                          subgroup_probs=c('ER-'=1-0.41, 'ER+'=0.41)))
+checkpaper$map <- create_stageshift_map(checkpaper$nh)
+checkpaper$tx <- with(checkpaper, create_treatment_distribution(nh, pol,
+                                                                treat_hrs=c('None'=1,
+                                                                            'Tamoxifen'=0.7,
+                                                                            'Chemo'=0.775,
+                                                                            'Tamoxifen+Chemo'=0.542),
+                                                                treat_probs=c('None'=1,
+                                                                              'Tamoxifen'=0,
+                                                                              'Chemo'=0,
+                                                                              'Tamoxifen+Chemo'=0)))
+ERnegERposAdv <- TRUE
+if(ERnegERposAdv){
+    checkpaper$tx <- within(checkpaper$tx, {
+                                txHR[grepl('ER[-]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                                txHR[grepl('ER[-]', SSid) & txSSid == 'Tamoxifen+Chemo'] <- 1
+                                e9[txSSid == 'None'] <- 0
+                                e9[SSid == 'Early.ER+' & txSSid == 'Tamoxifen'] <- 1
+                                e9[SSid == 'Advanced.ER+' & txSSid == 'Tamoxifen+Chemo'] <- 1
+                                e9[grepl('ER[-]', SSid) & txSSid == 'Chemo'] <- 1
+                                           })
+} else {
+    checkpaper$tx <- within(checkpaper$tx, {
+                                txHR[grepl('ER[-]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                                txHR[grepl('ER[-]', SSid) & txSSid == 'Tamoxifen+Chemo'] <- 1
+                                e9[txSSid == 'None'] <- 0
+                                e9[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen+Chemo'] <- 1
+                                e9[grepl('ER[-]', SSid) & txSSid == 'Chemo'] <- 1
+                                           })
+}
+plyr::d_ply(checkpaper$tx,
+            'SSid',
+            with,
+            stopifnot(sum(e0) == 1 & sum(e9) == 1))
+set.seed(98103)
+uganda_checkpaper <- with(checkpaper, simpolicies(pol, nh, tx,
+                                                  minage=30,
+                                                  maxage=49,
+                                                  futimes=c(10, 20),
+                                                  popsize=100000)
+knitr::kable(uganda_checkpaper[['10']])
+```
+
+Questions:
+
+* Should early stage ER+ cancers get tamoxifen (as in paper) or tamoxifen+chemo
+  as in Shiny app?
+
 ## Incorporate HER2 subgroups and add new policy scenario
 The following code extends subgroups assuming 15% of cancers are HER2+, uncorrelated with ER status and stage at presentation, based on the example in the [introduction]() vignette. It also assumes efficacy of trastuzumab implies HR=0.60
 ```{r her2}
-her2 <- list(pol=data.frame(num=c(1, 2, 3, 4),
-                            id=c('e0', 'e1', 'e4', 'e10'),
-                            name=c('Base Case',
-                                   'Tamoxifen for ER+',
-                                   'Tamoxifen for ER+ and 23% stage shift',
-                                   'Tamoxifen for ER+, trastuzumab for HER2+, and 23% stage shift'),
-                            pairnum=c(NA, NA, 2, 3),
-                            earlydetHR=c(1, 1, 0.77, 0.77),
+her2 <- list(pol=data.frame(num=c(1, 2),
+                            id=c('e0', 'e10'),
+                            name=c('Standard of Care', 'Maximum'),
+                            pairnum=c(NA, 1),
+                            earlydetHR=c(1, 0.45),
                             stringsAsFactors=FALSE),
              nh=compile_naturalhist(prop_adv=0.78,
                                     mortrates=c(Early=exp.rate(0.69),
@@ -131,30 +245,36 @@ her2$map <- create_stageshift_map(her2$nh)
 her2$tx <- with(her2, create_treatment_distribution(nh, pol,
                                                     treat_hrs=c('None'=1,
                                                                 'Tamoxifen'=0.7,
-                                                                'Trastuzumab'=0.6),
+                                                                'Chemo'=0.775,
+                                                                'Tamoxifen+Chemo'=0.542,
+                                                                'Trastuzumab'=0.6,
+                                                                'Tamoxifen+Trastuzumab'=0.6,
+                                                                'Tamoxifen+Chemo+Trastuzumab'=0.6),
                                                     treat_probs=c('None'=1,
                                                                   'Tamoxifen'=0,
-                                                                  'Trastuzumab'=0)))
+                                                                  'Chemo'=0,
+                                                                  'Tamoxifen+Chemo'=0,
+                                                                  'Trastuzumab'=0,
+                                                                  'Tamoxifen+Trastuzumab'=0,
+                                                                  'Tamoxifen+Chemo+Trastuzumab'=0)))
 her2$tx <- within(her2$tx, {
-                         txHR[grepl('ER[-]', SSid) & txSSid == 'Tamoxifen'] <- 1
-                         txHR[grepl('HER2[-]', SSid) & txSSid == 'Trastuzumab'] <- 1
-                         e1[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
-                         e1[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
-                         e4[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
-                         e4[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
-                         e10[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
-                         e10[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
-                         e10[grepl('HER2[+]', SSid) & txSSid == 'None'] <- 0
-                         e10[grepl('ER[+]HER2[+]', SSid) & txSSid == 'Tamoxifen'] <- 0
-                         e10[grepl('HER2[+]', SSid) & txSSid == 'Trastuzumab'] <- 1
+                         txHR[grepl('ER[-]HER2[-]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                         txHR[grepl('ER[-]HER2[-]', SSid) & txSSid == 'Tamoxifen+Chemo'] <- 0.775
+                         txHR[grepl('ER[-]HER2[-]', SSid) & txSSid == 'Tamoxifen+Chemo+Trastuzumab'] <- 1
+                         txHR[grepl('ER[-]HER2[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                         txHR[grepl('ER[-]HER2[+]', SSid) & txSSid == 'Tamoxifen+Chemo'] <- 0.775
+                         txHR[grepl('ER[-]HER2[+]', SSid) & txSSid == 'Tamoxifen+Chemo+Trastuzumab'] <- 0.5
+                         e10[txSSid == 'None'] <- 0
+                         e10[SSid == 'Early.ER+HER2+' & txSSid == 'Tamoxifen+Trastuzumab'] <- 1
+                         e10[SSid == 'Advanced.ER+HER2+' & txSSid == 'Tamoxifen+Chemo+Trastuzumab'] <- 1
+                         e10[SSid == 'Early.ER+HER2-' & txSSid == 'Tamoxifen'] <- 1
+                         e10[SSid == 'Advanced.ER+HER2-' & txSSid == 'Tamoxifen+Chemo'] <- 1
+                         e10[grepl('ER[-]', SSid) & txSSid == 'Chemo'] <- 1
                             })
 plyr::d_ply(her2$tx,
             'SSid',
             with,
-            stopifnot(sum(e0) == 1 &
-                      sum(e1) == 1 &
-                      sum(e4) == 1 &
-                      sum(e10) == 1))
+            stopifnot(sum(e0) == 1 & sum(e10) == 1))
 set.seed(98103)
 uganda_her2 <- with(her2, simpolicies(pol, nh, tx,
                                       minage=30,
@@ -166,9 +286,35 @@ knitr::kable(uganda_her2[['10']])
 
 To do:
 
-* Modify policies to use mammography (30% advanced stage at diagnosis) and chemotherapy for all ER- cancers and advanced ER+ cancers.
-
-* Should trastuzumab be replaced with tamoxifen+trastuzumab so treatment distributions sum to 1 when stage-subgroups involve both treatments?
-
 * Use wider age range? Use longer follow-up?
 
+* Which policies to show? How to present results?
+
+* Modify maximum policy to use mammography (30% advanced stage at diagnosis)?
+
+## Tabulate necessary inputs for HER2 extension
+```{r tabulation}
+nhinput <- expand.grid(Stage=c('Early', 'Advanced'),
+                       ER=c('+', '-'),
+                       HER2=c('+', '-'),
+                       Proportion='')
+#write.csv(nhinput,
+#          file='natural_history_input.csv',
+#          quote=FALSE,
+#          row.names=FALSE)
+monotherapies <- c('Tamoxifen', 'Chemo', 'Trastuzumab')
+alltherapies <- expand.grid(t1=monotherapies,
+                            t2=monotherapies,
+                            t3=monotherapies)
+alltherapies <- apply(alltherapies, 1, function(x) paste(rev(sort(unique(x))), collapse='+'))
+txinput <- expand.grid(Treatment=unique(alltherapies),
+                       Stage=c('Early', 'Advanced'),
+                       ER=c('+', '-'),
+                       HER2=c('+', '-'),
+                       Efficacy='')
+txinput <- reshape::sort_df(txinput, vars=c('Treatment', 'Stage', 'ER', 'HER2'))
+#write.csv(txinput,
+#          file='treatment_efficacy_input.csv',
+#          quote=FALSE,
+#          row.names=FALSE)
+```
