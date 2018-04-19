@@ -10,8 +10,10 @@ library(ggplot2)
 
 set.seed(98103)
 
-datestamp <- '2018-04-13'
-plotpath <- file.path('..', '..', '..', 'plots')
+#datestamp <- '2018-04-13'
+datestamp <- '2018-04-19'
+
+plotpath <- file.path('..', '..', '..', '..', 'plots')
 
 ##################################################
 # Convert k-year survival to exponential rate
@@ -116,6 +118,121 @@ plyr::d_ply(polseq$tx,
                       sum(MECA) == 1))
 
 ##################################################
+# Confirm treatment distributions sum to 1
+##################################################
+plyr::d_ply(polseq$tx,
+            'SSid',
+            with,
+            stopifnot(sum(BC) == 1 &
+                      sum(CA) == 1 &
+                      sum(CBE) == 1 &
+                      sum(M) == 1 &
+                      sum(ME) == 1 &
+                      sum(MEC) == 1 &
+                      sum(MECA) == 1))
+
+##################################################
+# Extend sequence of policies to include HER2
+##################################################
+nh <- read.csv('natural_history_inputs_2018-04-18.csv')
+nh <- rename(nh, c(Stage='stage', Proportion='prop'))
+nh <- transform(nh, subgroup=paste0('ER', ER, 'HER2', HER2))
+nh <- subset(nh, select=-c(ER, HER2))
+subgroup_dummy <- with(subset(nh, stage == 'Advanced'), prop/sum(prop))
+names(subgroup_dummy) <- with(subset(nh, stage == 'Advanced'), subgroup)
+
+polseq <- list(pol=data.frame(num=seq(8),
+                              id=c('BC', 'CA', 'CBE', 'M', 'ME', 'MEC', 'MECA', 'MECAH'),
+                              name=c('Base case',
+                                     'Clinical access',
+                                     'CBE',
+                                     'Mammography',
+                                     'Mammography/ET for ER+',
+                                     'Mammography/ET for ER+/Chemo for ER-',
+                                     'Mammography/ET for ER+/Chemo for ER-/Chemo for adv ER+',
+                                     'Mammography/ET for ER+/Chemo for ER-/Chemo for adv ER+/Trastuzumab for HER2+'),
+                              pairnum=c(NA, rep(1, 7)),
+                              earlydetHR=c(1, 0.60/0.78, 0.35/0.78, rep(0.30/0.78, 5)),
+                              stringsAsFactors=FALSE),
+               nh=compile_naturalhist(prop_adv=0.78,
+                                      mortrates=c(Early=exp.rate(0.69),
+                                                  Advanced=exp.rate(0.35)),
+                                      subgroup_probs=subgroup_dummy))
+polseq$nh <- merge(subset(polseq$nh, select=-prop),
+                   nh,
+                   by=c('stage', 'subgroup'),
+                   sort=FALSE)[, c('prop', 'stage', 'subgroup', 'mortrate')]
+class(polseq$nh) <- c('data.frame', 'naturalhist')
+polseq$map <- create_stageshift_map(polseq$nh)
+polseq$tx <- with(polseq, create_treatment_distribution(nh, pol,
+                                            treat_hrs=c('None'=1,
+                                                        'Tamoxifen'=0.7,
+                                                        'Chemo'=0.775,
+                                                        'Tamoxifen+Chemo'=0.5425,
+                                                        'Trastuzumab'=0.7,
+                                                        'Chemo+Trastuzumab'=0.5425,
+                                                        'Tamoxifen+Trastuzumab'=0.49,
+                                                        'Tamoxifen+Chemo+Trastuzumab'=0.37975),
+                                            treat_probs=c('None'=1,
+                                                          'Tamoxifen'=0,
+                                                          'Chemo'=0,
+                                                          'Tamoxifen+Chemo'=0,
+                                                          'Trastuzumab'=0,
+                                                          'Chemo+Trastuzumab'=0,
+                                                          'Tamoxifen+Trastuzumab'=0,
+                                                          'Tamoxifen+Chemo+Trastuzumab'=0)))
+polseq$tx <- within(polseq$tx, {
+         txHR[grepl('ER[-]', SSid) & txSSid == 'Tamoxifen'] <- 1
+         txHR[grepl('HER2[-]', SSid) & txSSid == 'Trastuzumab'] <- 1
+         txHR[grepl('ER[-]', SSid) & txSSid == 'Tamoxifen+Chemo'] <- 0.775
+         txHR[grepl('HER2[-]', SSid) & txSSid == 'Chemo+Trastuzumab'] <- 0.775
+         txHR[grepl('ER[-]HER2[-]', SSid) & txSSid == 'Tamoxifen+Trastuzumab'] <- 1
+         txHR[grepl('ER[-]HER2[+]', SSid) & txSSid == 'Tamoxifen+Trastuzumab'] <- 0.7
+         txHR[grepl('ER[+]HER2[-]', SSid) & txSSid == 'Tamoxifen+Trastuzumab'] <- 0.7
+         txHR[grepl('ER[-]HER2[-]', SSid) & txSSid == 'Tamoxifen+Chemo+Trastuzumab'] <- 0.775
+         txHR[grepl('ER[-]HER2[+]', SSid) & txSSid == 'Tamoxifen+Chemo+Trastuzumab'] <- 0.5425
+         txHR[grepl('ER[+]HER2[-]', SSid) & txSSid == 'Tamoxifen+Chemo+Trastuzumab'] <- 0.5425
+           })
+polseq$tx <- within(polseq$tx, {
+                         ME[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
+                         ME[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                         MEC[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
+                         MEC[grepl('ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                         MEC[grepl('ER[-]', SSid) & txSSid == 'None'] <- 0
+                         MEC[grepl('ER[-]', SSid) & txSSid == 'Chemo'] <- 1
+                         MECA[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
+                         MECA[grepl('Early.ER[+]', SSid) & txSSid == 'Tamoxifen'] <- 1
+                         MECA[grepl('Advanced.ER[+]', SSid) & txSSid == 'Tamoxifen+Chemo'] <- 1
+                         MECA[grepl('ER[-]', SSid) & txSSid == 'None'] <- 0
+                         MECA[grepl('ER[-]', SSid) & txSSid == 'Chemo'] <- 1
+                         MECAH[grepl('ER[+]', SSid) & txSSid == 'None'] <- 0
+                         MECAH[grepl('HER2[+]', SSid) & txSSid == 'None'] <- 0
+                         MECAH[SSid == 'Early.ER+HER2-' & txSSid == 'Tamoxifen'] <- 1
+                         MECAH[SSid == 'Advanced.ER+HER2-' & txSSid == 'Tamoxifen+Chemo'] <- 1
+                         MECAH[SSid == 'Early.ER+HER2+' & txSSid == 'Tamoxifen+Trastuzumab'] <- 1
+                         MECAH[SSid == 'Advanced.ER+HER2+' & txSSid == 'Tamoxifen+Chemo+Trastuzumab'] <- 1
+                         MECAH[grepl('ER[-]HER2[-]', SSid) & txSSid == 'None'] <- 0
+                         MECAH[grepl('ER[-]HER2[-]', SSid) & txSSid == 'Chemo'] <- 1
+                         MECAH[grepl('ER[-]HER2[+]', SSid) & txSSid == 'None'] <- 0
+                         MECAH[grepl('ER[-]HER2[+]', SSid) & txSSid == 'Chemo+Trastuzumab'] <- 1
+                            })
+
+##################################################
+# Confirm treatment distributions sum to 1
+##################################################
+plyr::d_ply(polseq$tx,
+            'SSid',
+            with,
+            stopifnot(sum(BC) == 1 &
+                      sum(CA) == 1 &
+                      sum(CBE) == 1 &
+                      sum(M) == 1 &
+                      sum(ME) == 1 &
+                      sum(MEC) == 1 &
+                      sum(MECA) == 1 &
+                      sum(MECAH) == 1))
+
+##################################################
 # Collect results
 ##################################################
 if(FALSE)
@@ -162,7 +279,7 @@ seqplot <- function(dset,
     ylabel <- paste(ylabel, 'after', fu, 'years\n')
     ymax <- switch(outcome,
                    'Cumulative BC Mortality'=450,
-                   'Years of Life Saved'=550)
+                   'Years of Life Saved'=650)
     results <- dset[[as.character(fu)]]
     results <- data.frame(Policy=colnames(results$mean),
                           Mean=results$mean[outcome, ],
@@ -177,7 +294,8 @@ seqplot <- function(dset,
                                                          'Mammography',
                                                          'Mammography\nET for ER+',
                                                          'Mammography\nET for ER+\nChemo for ER-',
-                                                         'Mammography\nET for ER+\nChemo for ER-\nChemo for adv ER+')))
+                                                         'Mammography\nET for ER+\nChemo for ER-\nChemo for adv ER+',
+                                                         'Mammography\nET for ER+\nChemo for ER-\nChemo for adv ER+\nTrastuzumab for HER2+')))
     gg_theme()
     gg <- ggplot(data=results)
     gg <- gg+geom_bar(aes(x=Policy, y=Mean),
@@ -211,7 +329,7 @@ seqplot <- function(dset,
         ggsave(file.path(plotpath, filename),
                plot=gg,
                height=5,
-               width=12)
+               width=14)
     }
 }
 seqplot(uganda_polseq, outcome='Cumulative BC Mortality', saveit=TRUE)
