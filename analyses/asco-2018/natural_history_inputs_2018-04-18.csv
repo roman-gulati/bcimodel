@@ -1,0 +1,9 @@
+Stage,ER,HER2,Proportion
+Early,+,+,0.03
+Advanced,+,+,0.12
+Early,-,+,0.02
+Advanced,-,+,0.08
+Early,+,-,0.06
+Advanced,+,-,0.24
+Early,-,-,0.09
+Advanced,-,-,0.36
