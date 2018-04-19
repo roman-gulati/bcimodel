@@ -57,7 +57,7 @@ create_treatment_distribution <- function(nh,
 ```
 
 ## Try to reproduce default analysis in Shiny app
-The following code reproduces the default analysis in the Shiny app based on the example in the [introduction]() vignette.
+The following code tries to reproduce the default analysis in the Shiny app based on the example in the [introduction]() vignette.
 ```{r default}
 exp.rate <- function(survival, year=5) -log(survival)/year
 
@@ -95,8 +95,7 @@ uganda_default <- with(default, simpolicies(pol, nh, tx,
                                             minage=30,
                                             maxage=49,
                                             futimes=c(10, 20),
-                                            popsize=100000,
-                                            sims=100))
+                                            popsize=100000))
 knitr::kable(uganda_default[['10']])
 ```
 
@@ -113,7 +112,7 @@ checkapp <- list(pol=data.frame(num=c(1, 2),
                                 id=c('e0', 'e4'),
                                 name=c('Standard of Care', 'Intervention'),
                                 pairnum=c(NA, 1),
-                                earlydetHR=c(1, 0.77),
+                                earlydetHR=c(1, 0.60/0.78),
                                 stringsAsFactors=FALSE),
                  nh=compile_naturalhist(prop_adv=0.78,
                                         mortrates=c(Early=exp.rate(0.69),
@@ -159,7 +158,8 @@ uganda_checkapp <- with(checkapp, simpolicies(pol, nh, tx,
                                               popsize=100000))
 knitr::kable(uganda_checkapp[['10']])
 ```
-These results are now identical to those obtained in the app. More precisely, it
+
+These results are now close to those obtained in the app. More precisely, it
 appears it doesn't matter (1) whether treatment distributions sum to 1 within each
 stage or within each stage-subgroup and (2) whether the tamoxifen txHR=0.7 or
 1.0 for ER- cancers. However, it does matter whether ER+ or ER- is specified

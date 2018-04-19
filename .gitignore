@@ -30,6 +30,8 @@ vignettes/*.synctex.gz
 vignettes/*.tex
 vignettes/*.log
 vignettes/*.toc
+vignettes/*.md
+vignettes/*.pdf
 
 # produced vignettes - archived files
 vignettes/eastafrica-colombia/archive
@@ -46,3 +48,7 @@ vignettes/eastafrica-colombia/archive
 *.utf8.md
 *.knit.md
 .Rproj.user
+
+# Temporary files created by Nvim-R
+*.sw*
+
