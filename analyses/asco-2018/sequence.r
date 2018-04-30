@@ -233,18 +233,6 @@ plyr::d_ply(polseq$tx,
                       sum(MECAH) == 1))
 
 ##################################################
-# Collect results
-##################################################
-if(FALSE)
-    uganda_polseq <- with(polseq, simpolicies(pol, nh, tx,
-                                              minage=30,
-                                              maxage=69,
-                                              futimes=c(10, 20),
-                                              popsize=100000,
-                                              returnstats=c('mean', 'lower', 'upper'),
-                                              sims=100))
-
-##################################################
 # Tabulate results
 ##################################################
 #knitr::kable(uganda_polseq[['10']])
@@ -328,10 +316,176 @@ seqplot <- function(dset,
         filename <- paste(filename, ext, sep='.')
         ggsave(file.path(plotpath, filename),
                plot=gg,
-               height=5,
+               height=8,
                width=14)
     }
 }
-seqplot(uganda_polseq, outcome='Cumulative BC Mortality', saveit=TRUE)
-seqplot(uganda_polseq, outcome='Years of Life Saved', saveit=TRUE)
+
+##################################################
+# Execute and visualize results
+##################################################
+execute_sequence <- function(polseq, saveit=FALSE){
+    uganda_polseq <- with(polseq, simpolicies(pol, nh, tx,
+                                              minage=30,
+                                              maxage=69,
+                                              futimes=c(10, 20),
+                                              popsize=100000,
+                                              returnstats=c('mean', 'lower', 'upper'),
+                                              sims=100))
+    seqplot(uganda_polseq, outcome='Cumulative BC Mortality', saveit=saveit)
+    seqplot(uganda_polseq, outcome='Years of Life Saved', saveit=saveit)
+}
+#execute_sequence(polseq, saveit=TRUE)
+
+##################################################
+# Visualize natural history inputs
+##################################################
+nh <- read.csv('natural_history_inputs_2018-04-18.csv')
+nh <- rename(nh, c(Stage='stage', Proportion='prop'))
+nh <- transform(nh, merged.label=paste(paste0('ER', ER),
+                                       paste0('HER2', HER2),
+                                       sep='/'))
+
+nhplot <- function(nh, ext='png', saveit=FALSE){
+    nh <- transform(nh, stage=factor(stage,
+                                     levels=c('Early', 'Advanced'),
+                                     labels=c('\nEarly', '\nAdvanced')))
+    gg_theme(legend.position='none',
+             axis.ticks=element_blank(),
+             axis.text.x=element_text(size=18),
+             axis.text.y=element_blank(),
+             axis.line=element_blank())
+    gg <- ggplot(data=nh)
+    gg <- gg+geom_tile(aes(x=stage,
+                           y=merged.label,
+                           width=prop/max(prop),
+                           height=prop/max(prop)),
+                       fill='gray85')
+    gg <- gg+geom_text(aes(x=stage,
+                           y=merged.label,
+                           label=merged.label,
+                           size=prop/max(prop)),
+                       colour='purple')
+    gg <- gg+scale_x_discrete(name='', expand=c(0, 0))
+    gg <- gg+scale_y_discrete(name='', expand=c(0, 0))
+    print(gg)
+    if(saveit){
+        prefix <- 'bcimodel_uganda_natural_history'
+        filename <- paste(prefix, datestamp, sep='_')
+        filename <- paste(filename, ext, sep='.')
+        ggsave(file.path(plotpath, filename),
+               plot=gg,
+               height=3,
+               width=5)
+    }
+}
+#nhplot(nh, saveit=TRUE)
+
+##################################################
+# Visualize survival and early detection inputs
+##################################################
+survfun <- function(x, rate=1) 1-pexp(x, rate=rate)
+
+survplot <- function(nh, ext='png', saveit=FALSE){
+    dset <- plyr::ddply(nh,
+                        'stage',
+                        plyr::summarize,
+                        rate=unique(mortrate))
+    dset <- plyr::ddply(dset,
+                        'stage',
+                        transform,
+                        x=seq(0, 10, by=0.1))
+    dset <- plyr::ddply(dset,
+                        'stage',
+                        transform,
+                        survival=survfun(x, rate=rate))
+    gg_theme(legend.position='none')
+    gg <- ggplot(data=dset)
+    gg <- gg+geom_line(aes(x=x,
+                           y=survival,
+                           group=stage,
+                           colour=stage),
+                       size=0.75)
+    gg <- gg+geom_text(data=subset(dset, x == 10),
+                       aes(x=x,
+                           y=survival,
+                           label=stage,
+                           colour=stage),
+                       hjust=1,
+                       vjust=1.2,
+                       size=6)
+    gg <- gg+scale_x_continuous(name='\nYears since diagnosis',
+                                limits=c(0, 11),
+                                breaks=seq(0, 10, by=2),
+                                expand=c(0, 0))
+    gg <- gg+scale_y_continuous(name='Survival\n',
+                                limits=c(0, 1),
+                                label=percent_format(),
+                                expand=c(0, 0))
+    gg <- gg+scale_colour_manual(values=c(Early='darkgreen', Advanced='orange'))
+    print(gg)
+    if(saveit){
+        prefix <- 'bcimodel_uganda_survival'
+        filename <- paste(prefix, datestamp, sep='_')
+        filename <- paste(filename, ext, sep='.')
+        ggsave(file.path(plotpath, filename),
+               plot=gg,
+               height=3,
+               width=5)
+    }
+}
+#survplot(polseq$nh, saveit=TRUE)
+
+##################################################
+# Visualize treatment efficacy inputs
+##################################################
+txplot <- function(tx, ext='png', saveit=FALSE){
+    tx <- subset(tx, select=c(SSid, txSSid, txHR))
+    tx <- transform(tx,
+                    stage=sub('^([^.]*)[.](ER[+-])(HER2[+-])$', '\\1', SSid),
+                    ER=sub('^([^.]*)[.](ER[+-])(HER2[+-])$', '\\2', SSid),
+                    HER2=sub('^([^.]*)[.](ER[+-])(HER2[+-])$', '\\3', SSid))
+    casted <- cast(tx, stage+ER+HER2~txSSid, value='txHR')
+    melted <- melt(casted, id.vars=c('stage', 'ER', 'HER2'))
+    melted <- rename(melted, c(txSSid='treatment', value='HR'))
+    melted <- transform(melted,
+                        treatment=factor(treatment, levels=c('None',
+                                                             'Tamoxifen',
+                                                             'Chemo',
+                                                             'Tamoxifen+Chemo',
+                                                             'Trastuzumab',
+                                                             'Tamoxifen+Trastuzumab',
+                                                             'Chemo+Trastuzumab',
+                                                             'Tamoxifen+Chemo+Trastuzumab')),
+                        stage=factor(stage, levels=c('Early', 'Advanced')))
+    gg_theme(legend.position='none',
+             panel.spacing=unit(0.01, 'npc'),
+             axis.ticks=element_blank(),
+             axis.text.x=element_text(size=10, angle=90, hjust=1, vjust=0.5))
+    gg <- ggplot(data=melted)
+    gg <- gg+geom_rect(aes(xmin=treatment,
+                           xmax=treatment,
+                           ymin=HR,
+                           ymax=1,
+                           colour=treatment),
+                       size=1)
+    gg <- gg+geom_hline(yintercept=1, colour='darkgray')
+    gg <- gg+facet_grid(HER2+ER~stage)
+    gg <- gg+scale_x_discrete(name='')
+    gg <- gg+scale_y_continuous(name='Hazard ratio\n',
+                                limits=c(0.2, 1.2),
+                                breaks=seq(0.4, 1, by=0.2),
+                                expand=c(0, 0))
+    print(gg)
+    if(saveit){
+        prefix <- 'bcimodel_uganda_treatment_efficacy'
+        filename <- paste(prefix, datestamp, sep='_')
+        filename <- paste(filename, ext, sep='.')
+        ggsave(file.path(plotpath, filename),
+               plot=gg,
+               height=6,
+               width=9)
+    }
+}
+#txplot(polseq$tx, saveit=TRUE)
 
